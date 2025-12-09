@@ -13,7 +13,7 @@ from torch.serialization import default_restore_location
 import sys
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-from seq2seq.decode import beam_search_decode, decode, beam_search_relative, beam_search_absolute
+from seq2seq.decode_a5_task4 import beam_search_decode, decode, beam_search_relative, beam_search_absolute
 from seq2seq.data.tokenizer import BPETokenizer
 from seq2seq import models, utils
 from seq2seq.data.dataset import Seq2SeqDataset, BatchSampler
@@ -172,8 +172,7 @@ def main(args):
                                               device=DEVICE,
                                               beam_size=args.beam_size,
                                               alpha=args.alpha,
-                                                
-            
+                                                          
                                               )
             #----------------------------------------
 
