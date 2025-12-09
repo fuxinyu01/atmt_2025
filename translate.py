@@ -163,7 +163,7 @@ def main(args):
                                       args=args,
                                       device=DEVICE)
             else:
-                prediction = beam_search_absolute(model=model,
+                prediction = beam_search_decode(model=model,
                                               src_tokens=src_tokens,
                                               src_pad_mask=src_pad_mask,
                                               max_out_len=args.max_len,
@@ -172,7 +172,7 @@ def main(args):
                                               device=DEVICE,
                                               beam_size=args.beam_size,
                                               alpha=args.alpha,
-                                              ap=1.5  
+                                                
             
                                               )
             #----------------------------------------
