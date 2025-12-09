@@ -1,4 +1,5 @@
 import torch
+import math
 import sentencepiece as spm
 from seq2seq.models import Seq2SeqModel
 
@@ -40,6 +41,15 @@ def decode(model: Seq2SeqModel, src_tokens: torch.Tensor, src_pad_mask: torch.Te
         predicted_tokens.append(seq)
     return predicted_tokens
 
+def length_normalization(seq: torch.Tensor, log_prob: float, alpha: float) -> float:
+    length = seq.size(1) - 1
+
+    if alpha == 0.0:
+        return log_prob  # no length penalty
+
+    lp = ((5.0 + float(length)) ** alpha) / (6.0 ** alpha)
+    return log_prob / lp
+
 def beam_search_decode(model: Seq2SeqModel, src_tokens: torch.Tensor, src_pad_mask: torch.Tensor, max_out_len: int,
                        tgt_tokenizer: spm.SentencePieceProcessor, args, device: torch.device, beam_size: int = 5, alpha: float = 0.7):
     """Beam Search decoding compatible with Transformer-based Seq2Seq models."""
@@ -70,11 +80,121 @@ def beam_search_decode(model: Seq2SeqModel, src_tokens: torch.Tensor, src_pad_ma
                 new_score = score + topk_log_probs[:, k].item()
                 new_beams.append((new_seq, new_score))
 
-        beams = sorted(new_beams, key=lambda x: x[1], reverse=True)[:beam_size]
+        beams = sorted(new_beams, key=lambda x: length_normalization(x[0], x[1], alpha), reverse=True)[:beam_size]
         # __QUESTION 5: Why do we check for EOS here and what does it imply for beam search?
         if all(seq[0, -1].item() == EOS for seq, _ in beams):
             break
     best_seq, _ = beams[0]
     # __QUESTION 6: What is returned, and why are we squeezing, converting to list and wrapping in another list here?
     return [best_seq.squeeze(0).tolist()]
+
+def beam_search_relative(model, src_tokens, src_pad_mask, max_out_len,
+                         tgt_tokenizer, args, device,
+                         beam_size=5, alpha=0.7, rp=0.6):
+
+    model.eval()
+    BOS, EOS, PAD = tgt_tokenizer.bos_id(), tgt_tokenizer.eos_id(), tgt_tokenizer.pad_id()
+    beams = [(torch.tensor([[BOS]], device=device), 0.0)]
+
+    for _ in range(max_out_len):
+        new_beams = []
+        for seq, score in beams:
+            if seq[0, -1].item() == EOS:
+                new_beams.append((seq, score))
+                continue
+
+            with torch.no_grad():
+                trg_mask = (seq == PAD).unsqueeze(1).unsqueeze(2)
+                logits = model(src_tokens, src_pad_mask, seq, trg_mask)[:, -1, :]
+                log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+                top_lp, top_ids = log_probs.topk(beam_size, dim=-1)
+
+            for k in range(beam_size):
+                nxt = top_ids[:, k].unsqueeze(0)
+                seq2 = torch.cat([seq, nxt], dim=1)
+                sc2 = score + top_lp[:, k].item()
+                new_beams.append((seq2, sc2))
+
+        if not new_beams:
+            break
+
+        norms = [length_normalization(s, sc, alpha) for (s, sc) in new_beams]
+        best_norm = max(norms)
+
+        pruned = []
+        for (s, sc), nm in zip(new_beams, norms):
+            if nm >= math.log(rp) + best_norm:
+                pruned.append((s, sc))
+
+        if not pruned:
+            pruned = new_beams
+
+        pruned = sorted(
+            pruned,
+            key=lambda x: length_normalization(x[0], x[1], alpha),
+            reverse=True
+        )[:beam_size]
+
+        beams = pruned
+
+        if all(s[0, -1].item() == EOS for s, _ in beams):
+            break
+
+    best = max(beams, key=lambda x: length_normalization(x[0], x[1], alpha))
+    return [best[0].squeeze(0).tolist()]
+
+def beam_search_absolute(model, src_tokens, src_pad_mask, max_out_len,
+                         tgt_tokenizer, args, device,
+                         beam_size=5, alpha=0.7, ap=2.0):
+
+    model.eval()
+    BOS, EOS, PAD = tgt_tokenizer.bos_id(), tgt_tokenizer.eos_id(), tgt_tokenizer.pad_id()
+    beams = [(torch.tensor([[BOS]], device=device), 0.0)]
+
+    for _ in range(max_out_len):
+        new_beams = []
+        for seq, score in beams:
+            if seq[0, -1].item() == EOS:
+                new_beams.append((seq, score))
+                continue
+
+            with torch.no_grad():
+                trg_mask = (seq == PAD).unsqueeze(1).unsqueeze(2)
+                logits = model(src_tokens, src_pad_mask, seq, trg_mask)[:, -1, :]
+                log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+                top_lp, top_ids = log_probs.topk(beam_size, dim=-1)
+
+            for k in range(beam_size):
+                nxt = top_ids[:, k].unsqueeze(0)
+                seq2 = torch.cat([seq, nxt], dim=1)
+                sc2 = score + top_lp[:, k].item()
+                new_beams.append((seq2, sc2))
+
+        if not new_beams:
+            break
+
+        norms = [length_normalization(s, sc, alpha) for (s, sc) in new_beams]
+        best_norm = max(norms)
+
+        pruned = []
+        for (s, sc), nm in zip(new_beams, norms):
+            if nm >= best_norm - ap:
+                pruned.append((s, sc))
+
+        if not pruned:
+            pruned = new_beams
+
+        pruned = sorted(
+            pruned,
+            key=lambda x: length_normalization(x[0], x[1], alpha),
+            reverse=True
+        )[:beam_size]
+
+        beams = pruned
+
+        if all(s[0, -1].item() == EOS for s, _ in beams):
+            break
+
+    best = max(beams, key=lambda x: length_normalization(x[0], x[1], alpha))
+    return [best[0].squeeze(0).tolist()]
 

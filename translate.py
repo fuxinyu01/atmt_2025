@@ -13,7 +13,7 @@ from torch.serialization import default_restore_location
 import sys
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-from seq2seq.decode import beam_search_decode, decode
+from seq2seq.decode import beam_search_decode, decode, beam_search_relative, beam_search_absolute
 from seq2seq.data.tokenizer import BPETokenizer
 from seq2seq import models, utils
 from seq2seq.data.dataset import Seq2SeqDataset, BatchSampler
@@ -163,7 +163,7 @@ def main(args):
                                       args=args,
                                       device=DEVICE)
             else:
-                prediction = beam_search_decode(model=model,
+                prediction = beam_search_absolute(model=model,
                                               src_tokens=src_tokens,
                                               src_pad_mask=src_pad_mask,
                                               max_out_len=args.max_len,
@@ -171,7 +171,10 @@ def main(args):
                                               args=args,
                                               device=DEVICE,
                                               beam_size=args.beam_size,
-                                              alpha=args.alpha)
+                                              alpha=args.alpha,
+                                              ap=1.5  
+            
+                                              )
             #----------------------------------------
 
         # Remove BOS and decode each sentence
